@@ -1,6 +1,7 @@
 #include <print>
 #include <coroutine>
 #include <format>
+#include <stdexcept>
 
 struct PreviousAwaiter {
 	bool await_ready() const noexcept {
@@ -45,7 +46,7 @@ struct Promise {
 	}
 
 	void unhandled_exception() {
-		std::abort();
+		throw;
 	}
 
 	auto yield_value(int value) {
@@ -83,8 +84,9 @@ struct HelloAwaiter {
 		return m_handle;
 	}
 
-	void await_resume() const {
+	int await_resume() const {
 		std::println("HelloAwaiter await_resume");
+		return 42;
 	}
 
 	std::coroutine_handle<Promise> m_handle;
@@ -150,8 +152,8 @@ auto hello() -> HelloTask {
 auto world() -> WorldTask {
 	std::println("world start");
 	std::println("hello() start");
-	co_await hello();
-	std::println("hello() end");
+	int n = co_await hello();
+	std::println("hello() return {} end", n);
 	co_return;
 }
 
