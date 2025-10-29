@@ -1,22 +1,14 @@
-#include <print>
+﻿#include <print>
 #include <functional>
 #include <memory>
 
 #ifdef _MSC_VER
 #include <windows.h>
 
-// ============================================
-// 简单协程类 - Windows Fiber版本
-// ============================================
 class SimpleCoroutine {
 private:
-    // ========== 成员变量 ==========
-    
     /**
      * fiber_: 协程的Fiber句柄
-     * - Fiber是Windows提供的轻量级线程
-     * - 每个Fiber有独立的栈空间和执行上下文
-     * - nullptr表示尚未创建
      */
     LPVOID fiber_{nullptr};
     
@@ -30,16 +22,12 @@ private:
     
     /**
      * task_: 协程要执行的任务函数
-     * - std::function可以存储任何可调用对象（函数、lambda等）
      * - 协程启动后会执行这个函数
-     * - 使用std::move避免不必要的拷贝
      */
     std::function<void()> task_;
     
     /**
      * finished_: 协程是否执行完毕的标志
-     * - true: 任务已执行完，不能再resume
-     * - false: 任务未完成或正在执行
      */
     bool finished_{false};
     
@@ -56,9 +44,6 @@ public:
     /**
      * 构造函数：创建一个新的协程对象
      * @param func 要在协程中执行的任务函数
-     * 
-     * explicit: 防止隐式类型转换
-     * std::move(func): 移动语义，避免拷贝函数对象
      */
     explicit SimpleCoroutine(std::function<void()> func) : task_{std::move(func)} {}
     
@@ -70,26 +55,16 @@ public:
      * - Windows会自动回收Fiber的栈空间
      */
     ~SimpleCoroutine() {
-        if (fiber_) DeleteFiber(fiber_);
+        if (fiber_) {
+            DeleteFiber(fiber_);
+        }
     }
     
-    // ========== 禁止拷贝 ==========
-    
-    /**
-     * 删除拷贝构造和拷贝赋值
-     * - 协程对象持有系统资源（Fiber句柄）
-     * - 拷贝会导致资源管理混乱
-     * - 只允许移动语义（如果需要的话）
-     */
     SimpleCoroutine(const SimpleCoroutine&) = delete;
     SimpleCoroutine& operator=(const SimpleCoroutine&) = delete;
     
-    // ========== 核心方法：resume ==========
-    
     /**
      * resume(): 启动或恢复协程执行
-     * 
-     * 执行流程：
      * 1. 检查协程是否已结束
      * 2. 首次调用时初始化Fiber
      * 3. 切换到协程上下文执行
@@ -439,56 +414,16 @@ void coroutine_task() {
  * main: 主函数，演示协程的使用
  */
 int main() {
-    std::println("=== 简单协程示例 ===\n");
+    std::println("协程示例");
     
     // --- 创建协程 ---
-    /**
-     * 使用花括号初始化（C++11统一初始化）
-     * - 传入任务函数coroutine_task
-     */
     SimpleCoroutine co{coroutine_task};
     
-    // --- 第一次resume ---
-    /**
-     * 首次启动协程
-     * - 执行到第一个yield()
-     * - 打印"协程执行第 1 步"后返回
-     */
-    std::println("主函数：首次启动协程");
-    co.resume();
-    
-    std::println("\n主函数：做一些其他工作...\n");
-    
-    // --- 第二次resume ---
-    /**
-     * 恢复协程执行
-     * - 从第一个yield()后继续
-     * - 执行到第二个yield()
-     */
-    std::println("主函数：第二次恢复协程");
-    co.resume();
-    
-    std::println("\n主函数：继续工作...\n");
-    
-    // --- 第三次resume ---
-    std::println("主函数：第三次恢复协程");
-    co.resume();
-    
-    // --- 第四次resume ---
-    /**
-     * 最后一次恢复
-     * - 协程执行完毕
-     * - finished_被设置为true
-     */
-    std::println("\n主函数：最后一次恢复协程");
-    co.resume();
-    
-    // --- 检查状态 ---
-    /**
-     * 格式化输出：{}会被后面的参数替换
-     * - 三元运算符：条件 ? 真值 : 假值
-     */
-    std::println("\n协程是否结束：{}", co.is_finished() ? "是" : "否");
+    while (!co.is_finished()) {
+        co.resume();
+        std::println("切换回主函数");
+    }
     
     return 0;
 }
+
