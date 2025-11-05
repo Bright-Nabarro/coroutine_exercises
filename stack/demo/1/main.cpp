@@ -1,429 +1,170 @@
-﻿#include <print>
+#include <print>
 #include <functional>
 #include <memory>
+#include <cassert>
 
-#ifdef _MSC_VER
+#if defined(_WIN32)
+
 #include <windows.h>
+#define CO_USE_FIBER
+using CoHandle = void*;
 
-class SimpleCoroutine {
-private:
-    /**
-     * fiber_: 协程的Fiber句柄
-     */
-    LPVOID fiber_{nullptr};
-    
-    /**
-     * main_fiber_: 主函数的Fiber句柄
-     * - 保存调用resume()的线程/Fiber的上下文
-     * - 用于从协程返回到主函数
-     * - yield()时会切换回这个Fiber
-     */
-    LPVOID main_fiber_{nullptr};
-    
-    /**
-     * task_: 协程要执行的任务函数
-     * - 协程启动后会执行这个函数
-     */
-    std::function<void()> task_;
-    
-    /**
-     * finished_: 协程是否执行完毕的标志
-     */
-    bool finished_{false};
-    
-    /**
-     * current_: 当前正在运行的协程指针（线程局部变量）
-     * - thread_local: 每个线程有独立的副本
-     * - 用于在静态函数yield()中访问当前协程
-     */
-    static inline thread_local SimpleCoroutine* current_{nullptr};
+#elif defined(__unix__)
 
-public:
-    // ========== 构造函数 ==========
-    
-    /**
-     * 构造函数：创建一个新的协程对象
-     * @param func 要在协程中执行的任务函数
-     */
-    explicit SimpleCoroutine(std::function<void()> func) : task_{std::move(func)} {}
-    
-    // ========== 析构函数 ==========
-    
-    /**
-     * 析构函数：清理协程资源
-     * - 如果fiber_不为空，删除Fiber对象
-     * - Windows会自动回收Fiber的栈空间
-     */
-    ~SimpleCoroutine() {
-        if (fiber_) {
-            DeleteFiber(fiber_);
-        }
-    }
-    
-    SimpleCoroutine(const SimpleCoroutine&) = delete;
-    SimpleCoroutine& operator=(const SimpleCoroutine&) = delete;
-    
-    /**
-     * resume(): 启动或恢复协程执行
-     * 1. 检查协程是否已结束
-     * 2. 首次调用时初始化Fiber
-     * 3. 切换到协程上下文执行
-     * 4. 协程yield或结束后返回这里
-     */
-    void resume() {
-        // --- 步骤1：检查协程状态 ---
-        if (finished_) {
-            std::println("协程已结束");
-            return;  // 已结束的协程不能再恢复
-        }
-        
-        // --- 步骤2：首次调用时的初始化 ---
-        if (!fiber_) {
-            // 如果线程已经是fiber，直接获取当前句柄
-            main_fiber_ = ConvertThreadToFiber(nullptr);
-            if (!main_fiber_) {
-                main_fiber_ = GetCurrentFiber();
-            }
-            
-            /**
-             * CreateFiber: 创建新的Fiber
-             * - 参数1 (0): 栈大小，0表示使用默认大小（通常1MB）
-             * - 参数2 (fiber_entry): Fiber的入口函数
-             * - 参数3 (this): 传递给入口函数的参数（当前协程对象指针）
-             */
-            fiber_ = CreateFiber(0, fiber_entry, this);
-        }
-        
-        // --- 步骤3：设置当前协程并切换上下文 ---
-        // 相当于previous
-        // 压入返回地址
-        current_ = this;
-        
-        /**
-         * SwitchToFiber: 切换到协程Fiber执行
-         * - 保存当前执行状态（寄存器、栈指针等）
-         * - 恢复fiber_的执行状态
-         * - 跳转到协程代码继续执行
-         * 
-         * 注意：这个函数会"阻塞"直到：
-         * - 协程调用yield()切换回来
-         * - 或协程执行完毕
-         */
-        SwitchToFiber(fiber_);
-        
-        // --- 步骤4：协程返回后继续执行这里 ---
-        // 此时协程已经yield或执行完毕
-    }
-    
-    // ========== 核心方法：yield ==========
-    
-    /**
-     * yield(): 暂停协程，返回到调用resume()的地方
-     * 
-     * 这是一个静态方法，因为：
-     * - 在协程内部调用，不需要协程对象指针
-     * - 通过current_访问当前协程
-     */
-    static void yield() {
-        // --- 检查是否在协程上下文中 ---
-        if (current_ && current_->main_fiber_) {
-            /**
-             * SwitchToFiber: 切换回主Fiber
-             * - 保存协程的执行状态
-             * - 恢复main_fiber_的执行状态
-             * - 返回到resume()函数中SwitchToFiber的下一行
-             * 
-             * 当再次resume()时，会从这里的下一行继续执行
-             */
-            SwitchToFiber(current_->main_fiber_);
-        }
-        // 如果不在协程中调用yield，什么都不做
-    }
-    
-    // ========== 查询方法 ==========
-    
-    /**
-     * is_finished(): 查询协程是否执行完毕
-     * 
-     * [[nodiscard]]: C++17属性，提示调用者不应忽略返回值
-     * noexcept: 保证不抛异常
-     */
-    [[nodiscard]] bool is_finished() const noexcept { return finished_; }
-
-private:
-    // ========== Fiber入口函数 ==========
-    
-    /**
-     * fiber_entry: 协程Fiber的入口函数
-     * @param param 创建Fiber时传入的参数（this指针）
-     * 
-     * CALLBACK: Windows调用约定
-     * 
-     * 执行流程：
-     * 1. 将参数转换为协程对象指针
-     * 2. 执行用户任务
-     * 3. 标记协程完成
-     * 4. 返回主Fiber
-     */
-    static VOID CALLBACK fiber_entry(LPVOID param) {
-        // --- 步骤1：获取协程对象 ---
-        /**
-         * 将void*参数转换回SimpleCoroutine*
-         * - CreateFiber时传入的this指针
-         */
-        auto* co = static_cast<SimpleCoroutine*>(param);
-        
-        // --- 步骤2：执行用户任务 ---
-        /**
-         * 调用用户提供的任务函数
-         * - 这里会执行协程的实际逻辑
-         * - 可能包含多次yield()调用
-         */
-        co->task_();
-        
-        // --- 步骤3：标记完成 ---
-        /**
-         * 任务执行完毕，设置完成标志
-         * - 之后调用resume()会直接返回
-         */
-        co->finished_ = true;
-        
-        // --- 步骤4：返回主Fiber ---
-        /**
-         * 最后一次切换回主函数
-         * - 这次切换后，协程不会再被执行
-         * - resume()会检测到finished_为true
-         */
-        SwitchToFiber(co->main_fiber_);
-    }
-};
+#include <ucontext.h>
+using CoHandle = ucontext_t;
+#define CO_USE_UCONTEXT
 
 #else
-// ============================================
-// GCC/Clang版本 - 使用ucontext
-// ============================================
-#include <ucontext.h>
-#include <cstdlib>
-
-class SimpleCoroutine {
-private:
-    // ========== 成员变量 ==========
-    
-    /**
-     * co_context_: 协程的执行上下文
-     * - ucontext_t是POSIX标准的上下文结构
-     * - 保存CPU寄存器、栈指针、指令指针等
-     * - 用于保存和恢复协程的执行状态
-     */
-    ucontext_t co_context_{};
-    
-    /**
-     * main_context_: 主函数的执行上下文
-     * - 保存调用resume()时的执行状态
-     * - yield()时切换回这个上下文
-     */
-    ucontext_t main_context_{};
-    
-    /**
-     * stack_: 协程的栈空间
-     * - std::unique_ptr自动管理内存
-     * - char[]数组作为栈空间
-     * - 协程的局部变量、函数调用都在这个栈上
-     */
-    std::unique_ptr<char[]> stack_;
-    
-    /**
-     * task_: 协程要执行的任务函数
-     */
-    std::function<void()> task_;
-    
-    /**
-     * finished_: 协程是否执行完毕
-     */
-    bool finished_{false};
-    
-    /**
-     * current_: 当前正在运行的协程（线程局部）
-     */
-    static inline thread_local SimpleCoroutine* current_{nullptr};
-
-public:
-    // ========== 构造函数 ==========
-    
-    /**
-     * 构造函数：创建协程并初始化上下文
-     * @param func 任务函数
-     * @param stack_size 栈大小（默认64KB）
-     */
-    explicit SimpleCoroutine(std::function<void()> func, size_t stack_size = 64 * 1024) 
-        : stack_{std::make_unique<char[]>(stack_size)}, task_{std::move(func)} {
-        
-        // --- 步骤1：获取当前上下文 ---
-        /**
-         * getcontext: 获取当前执行上下文
-         * - 将当前CPU状态保存到co_context_
-         * - 作为makecontext的基础
-         */
-        getcontext(&co_context_);
-        
-        // --- 步骤2：设置协程栈 ---
-        /**
-         * 配置协程使用的栈空间
-         * - ss_sp: 栈的起始地址
-         * - ss_size: 栈的大小
-         */
-        co_context_.uc_stack.ss_sp = stack_.get();
-        co_context_.uc_stack.ss_size = stack_size;
-        
-        // --- 步骤3：设置协程结束后的行为 ---
-        /**
-         * uc_link: 协程执行完毕后要切换到的上下文
-         * - 设置为main_context_，执行完自动返回主函数
-         * - 如果为nullptr，执行完会退出线程
-         */
-        co_context_.uc_link = &main_context_;
-        
-        // --- 步骤4：设置协程入口函数 ---
-        /**
-         * makecontext: 修改上下文，设置入口函数
-         * - 参数1: 要修改的上下文
-         * - 参数2: 入口函数指针
-         * - 参数3: 入口函数的参数个数（0表示无参数）
-         */
-        makecontext(&co_context_, coroutine_entry, 0);
-    }
-    
-    // ========== 禁止拷贝 ==========
-    SimpleCoroutine(const SimpleCoroutine&) = delete;
-    SimpleCoroutine& operator=(const SimpleCoroutine&) = delete;
-    
-    // ========== 核心方法：resume ==========
-    
-    /**
-     * resume(): 启动或恢复协程
-     */
-    void resume() {
-        // --- 检查状态 ---
-        if (finished_) {
-            std::println("协程已结束");
-            return;
-        }
-        
-        // --- 设置当前协程 ---
-        current_ = this;
-        
-        // --- 切换上下文 ---
-        /**
-         * swapcontext: 保存当前上下文并切换到新上下文
-         * - 参数1: 保存当前上下文的位置（main_context_）
-         * - 参数2: 要切换到的上下文（co_context_）
-         * 
-         * 执行效果：
-         * 1. 保存当前CPU状态到main_context_
-         * 2. 从co_context_恢复CPU状态
-         * 3. 跳转到协程代码执行
-         * 
-         * 当协程yield时，会从这里的下一行继续执行
-         */
-        swapcontext(&main_context_, &co_context_);
-    }
-    
-    // ========== 核心方法：yield ==========
-    
-    /**
-     * yield(): 暂停协程
-     */
-    static void yield() {
-        if (current_) {
-            /**
-             * swapcontext: 从协程切换回主函数
-             * - 保存协程状态到co_context_
-             * - 恢复main_context_的状态
-             * - 返回到resume()中swapcontext的下一行
-             * 
-             * 下次resume时，会从这里的下一行继续执行
-             */
-            swapcontext(&current_->co_context_, &current_->main_context_);
-        }
-    }
-    
-    // ========== 查询方法 ==========
-    [[nodiscard]] bool is_finished() const noexcept { return finished_; }
-
-private:
-    // ========== 协程入口函数 ==========
-    
-    /**
-     * coroutine_entry: 协程的入口函数
-     * - 必须是静态函数（makecontext要求）
-     * - 通过current_访问协程对象
-     */
-    static void coroutine_entry() {
-        // --- 执行用户任务 ---
-        /**
-         * 执行用户提供的任务函数
-         * - current_在resume()中已设置
-         */
-        current_->task_();
-        
-        // --- 标记完成 ---
-        current_->finished_ = true;
-        
-        // --- 自动返回 ---
-        /**
-         * 函数返回时，由于uc_link设置为main_context_
-         * 会自动切换回主函数，无需手动swapcontext
-         */
-    }
-};
-
+#error "Unsupported platform"
 #endif
 
-// ============================================
-// 测试代码
-// ============================================
 
-/**
- * coroutine_task: 在协程中执行的任务
- * - 演示协程的暂停和恢复
- */
-void coroutine_task() {
-    std::println("协程开始执行");
-    
-    for (int i : {1, 2, 3}) {
-        std::println("协程执行第 {} 步", i);
-        
-        /**
-         * yield: 暂停协程，返回主函数
-         * - 保存当前执行位置
-         * - 下次resume会从这里继续
-         */
-        SimpleCoroutine::yield();
-        
-        /**
-         * resume后从这里继续执行
-         */
-        std::println("协程恢复执行");
-    }
-    
-    std::println("协程执行完毕");
-    // 函数返回，协程结束
+class CoContext {
+public:
+	explicit CoContext(std::function<void()> task):
+		m_context{},
+		m_main_context{},
+		m_task {std::move(task)},
+#ifdef CO_USE_UCONTEXT
+		m_stack_size {64 * 1024},
+		m_stack {std::make_unique<char[]>(m_stack_size)},
+#endif
+		m_finished {false}
+	{
+#ifdef CO_USE_UCONTEXT
+		// 保存当前上下文到m_context
+		getcontext(&m_context);
+		// 设置栈空间
+		m_context.uc_stack.ss_sp = m_stack.get();
+		m_context.uc_stack.ss_size = m_stack_size;
+		// 设置执行结束后返回的上下文
+		m_context.uc_link = &m_main_context;
+		// 设置入口函数, 函数无参数
+		makecontext(&m_context, context_entry, 0);
+#endif
+	}
+
+	~CoContext() {
+#ifdef CO_USE_FIBER
+		if (m_context) {
+			DeleteFiber(m_context);
+		}
+#endif
+	}
+
+	CoContext(const CoContext&) = delete;
+	CoContext& operator=(const CoContext&) = delete;
+	
+	void resume() {
+		if (m_finished) {
+			std::println("coroutine finished");
+			return;
+		}
+#ifdef CO_USE_FIBER
+		// fiber首次调用时初始化
+		if (m_context == nullptr) {
+			m_main_context = ConvertThreadToFiber(nullptr);
+			// 如果当前线程已经是fiber, 直接获取
+			if (!m_main_context) {
+				m_main_context = GetCurrentFiber();
+			}
+			// 创建协程fiber
+			m_context = CreateFiber(0, context_entry, this);
+		}
+#endif
+		// 第一次会设置，后面都是重复设置
+		m_current = this;
+
+#ifdef CO_USE_FIBER
+		SwitchToFiber(m_context);
+#else
+		// 保存当前上下文到m_main_context, 切换到协程上下文m_context
+		swapcontext(&m_main_context, &m_context);
+#endif
+	}
+
+	// 通过current访问当前协程
+	static void yield() {
+		// 检查是否在一个协程上下文中
+		if (m_current != nullptr) {
+#ifdef CO_USE_FIBER
+			SwitchToFiber(m_current->m_main_context);
+#else
+			// 保存状态到m_current->m_context, 切换到主函数上下文
+			swapcontext(&m_current->m_context, &m_current->m_main_context);
+#endif
+		}
+
+		// 如果不在协程中，什么都不做
+	}
+
+	[[nodiscard]]
+	auto is_finished() const noexcept -> bool {
+		return m_finished;
+	}
+
+private:
+#ifdef CO_USE_FIBER
+	/**
+	 * param param 创建Fiber时传入的参数（this指针）
+	 */
+	static void CALLBACK context_entry(void* param) {
+		auto* co = static_cast<CoContext*>(param);
+		try {
+			co->m_task();
+		}
+		catch (...) {
+			std::println("excepted exception");
+			co->m_finished = true;
+			throw;
+		}
+		co->m_finished = true;
+		// 切换回主函数
+		SwitchToFiber(co->m_main_context);
+	}
+#else
+	static void context_entry() {
+		m_current->m_task();
+		m_current->m_finished = true;
+		// 函数返回时， 使用uc_link中设置的上下文，切换回主函数
+	}
+#endif
+
+private:
+	static inline thread_local CoContext* m_current { nullptr };
+	// 句柄在Windows下是void*, unix下是ucontext_t
+	// 协程的句柄
+	CoHandle m_context;
+	// 主函数句柄
+	CoHandle m_main_context;
+	// 任务函数
+	std::function<void()> m_task;
+#ifdef CO_USE_UCONTEXT
+	// 栈大小
+	std::size_t m_stack_size;
+	// 栈空间
+	std::unique_ptr<char[]> m_stack;
+#endif
+	// 结束标记
+	bool m_finished;
+
+};
+
+void func() {
+	std::println("invoke 1");
+	CoContext::yield();
+	std::println("invoke 2");
+	CoContext::yield();
+	std::println("invoke 3");
+	CoContext::yield();
+	std::println("finish");
 }
 
-/**
- * main: 主函数，演示协程的使用
- */
-int main() {
-    std::println("协程示例");
-    
-    // --- 创建协程 ---
-    SimpleCoroutine co{coroutine_task};
-    
-    while (!co.is_finished()) {
-        co.resume();
-        std::println("切换回主函数");
-    }
-    
-    return 0;
+auto main() -> int {
+	CoContext context{ func };
+	std::println("main");
+	while (!context.is_finished()) {
+		context.resume();
+	}
 }
-

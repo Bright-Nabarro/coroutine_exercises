@@ -3,3 +3,5 @@ a.out.*
 *.exe
 build
 .vs
+.vscode
+.cache
