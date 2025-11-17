@@ -12,12 +12,12 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 if (MSVC)
-	#add_compile_definitions(${PROJECT_NAME} PRIVATE
-	#	"/utf-8"
-	#	"/fsanitize=address"
-	#)
+	add_compile_options(
+		"/utf-8"
+		"/fsanitize=address"
+	)
 else()
-	add_compile_definitions(${PROJECT_NAME} PRIVATE
+	add_compile_options(
 		"-Wall"
 		"-Wextra"
 	)

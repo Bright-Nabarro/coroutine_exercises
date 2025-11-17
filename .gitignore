@@ -2,6 +2,7 @@ a.out
 a.out.*
 *.exe
 build
+out
 .vs
 .vscode
 .cache
