@@ -1,0 +1,6 @@
+- 调用链中只能有一个协程
+- root -> caller
+- resume() 没有检查重入
+- 没有栈溢出保护
+- 协程任务是 std::function<void()>, 不支持返回值
+- yield/resume 之间无法传递数据

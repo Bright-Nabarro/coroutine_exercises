@@ -1,7 +1,9 @@
-#include <print>
+#pragma once
+
 #include <functional>
 #include <memory>
-#include <cassert>
+#include <stdexcept>
+#include <queue>
 
 #if defined(_WIN32)
 
@@ -20,18 +22,25 @@ using CoHandle = ucontext_t;
 #endif
 
 
-class CoContext {
+class Coroutine {
 public:
-	explicit CoContext(std::function<void()> task, std::size_t stack_size = 64 * 1024):
+	explicit Coroutine(std::function<void()> task, std::size_t stack_size = 64 * 1024):
 		m_root_context{},
 		m_context{},
 		m_task { std::move(task) },
-		m_stack_size { stack_size },
+		m_stack_size { stack_size }
 #ifdef CO_USE_UCONTEXT
-		m_stack {std::make_unique<char[]>(m_stack_size)},
+		, m_stack {std::make_unique<char[]>(m_stack_size)}
 #endif
 	{
-#ifdef CO_USE_UCONTEXT
+#ifdef CO_USE_FIBER
+		m_root_context = ConvertThreadToFiber(nullptr);
+		// 如果当前线程已经是fiber, 直接获取
+		if (!m_root_context) {
+			m_root_context = GetCurrentFiber();
+		}
+		m_context = CreateFiber(m_stack_size, context_entry, this);
+#else
 		// 当前上下文作为初始化模版
 		getcontext(&m_context);
 		// 设置栈空间
@@ -42,9 +51,10 @@ public:
 		// 设置入口函数, 函数无参数
 		makecontext(&m_context, context_entry, 0);
 #endif
+		m_current = this;
 	}
 
-	~CoContext() {
+	~Coroutine() {
 #ifdef CO_USE_FIBER
 		if (m_context) {
 			DeleteFiber(m_context);
@@ -52,33 +62,16 @@ public:
 #endif
 	}
 
-	CoContext(const CoContext&) = delete;
-	CoContext& operator=(const CoContext&) = delete;
+	Coroutine(const Coroutine&) = delete;
+	Coroutine& operator=(const Coroutine&) = delete;
 	
 	void resume() {
 		if (m_finished) {
-			std::println("coroutine finished");
+			throw std::logic_error{"coroutine finished"};
 			return;
 		}
-#ifdef CO_USE_FIBER
-		// fiber首次调用时初始化
-		if (m_context == nullptr) {
-			m_main_context = ConvertThreadToFiber(nullptr);
-			// 如果当前线程已经是fiber, 直接获取
-			if (!m_main_context) {
-				m_main_context = GetCurrentFiber();
-			}
-			// 创建协程fiber
-			m_context = CreateFiber(0, context_entry, this);
-		}
-#endif
-		// 第一次会设置，后面都是重复设置
-		m_current = this;
-
-#ifdef CO_USE_FIBER
-		SwitchToFiber(m_context);
-#else
-		// 保存当前上下文到m_main_context, 切换到协程上下文m_context
+#ifdef CO_USE_UCONTEXT
+		// 保存当前上下文到m_root_context, 切换到协程上下文m_context
 		swapcontext(&m_root_context, &m_context);
 #endif
 	}
@@ -88,11 +81,10 @@ public:
 		// 检查是否在一个协程上下文中
 		// 如果不在协程中，什么都不做
 		if (m_current == nullptr || m_current->m_finished) {
-			std::println("not in coroutine or coroutine finished");
-			return;
+			throw std::logic_error{"not in coroutine or coroutine finished"};
 		}
 #ifdef CO_USE_FIBER
-		SwitchToFiber(m_current->m_main_context);
+		SwitchToFiber(m_current->m_root_context);
 #else
 		// 保存状态到m_current->m_context, 切换到主函数上下文
 		swapcontext(&m_current->m_context, &m_current->m_root_context);
@@ -121,7 +113,7 @@ private:
 		}
 		co->m_finished = true;
 		// 切换回主函数
-		SwitchToFiber(co->m_main_context);
+		SwitchToFiber(co->m_root_context);
 	}
 #else
 	static void context_entry() {
@@ -132,7 +124,7 @@ private:
 #endif
 
 private:
-	static inline thread_local CoContext* m_current { nullptr };
+	static inline thread_local Coroutine* m_current { nullptr };
 	// 句柄在Windows下是void*, unix下是ucontext_t
 	// 调用函数句柄
 	CoHandle m_root_context;
@@ -151,33 +143,4 @@ private:
 	std::unique_ptr<char[]> m_stack;
 #endif
 };
-
-void func2() {
-	std::println("func2 start");
-	CoContext::yield();
-	std::println("func2 finish");
-}
-
-void func1() {
-	std::println("start");
-	CoContext::yield();
-	func2();
-	std::println("finish");
-}
-
-void test_func() {
-	std::println("test_func start");
-	CoContext::yield();
-	std::println("test_func finish");
-}
-
-auto main() -> int {
-	CoContext context{ func1 };
-	std::println("main");
-	while (!context.is_finished()) {
-		std::println("main function");
-		context.resume();
-	}
-	test_func();
-}
 
