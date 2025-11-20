@@ -1,4 +1,5 @@
 #include <print>
+#include <string>
 #include "simple_coroutine.hpp"
 
 // 测试1: 基础功能测试和异常测试
@@ -159,12 +160,57 @@ void test_nested_yield_different_coroutines() {
     
     std::println("Test 3 passed!\n");
 }
+
+void test_variable_parameters() {
+    std::println("=== Test 4: Single variable parameter callback ===");
+    VarCoroutine<int> co([](int a) {
+        std::println("callback got a: {}", a);
+        ++a;
+        Coroutine::yield();
+        std::println("calback increase a: {}", a);
+    });
+    
+    while(!co.is_finished()) {
+        co.resume();
+    }
+
+    std::println("Test 4 passed!\n");
+}
+
+void test_nested_variable_parameters() {
+    std::println("=== Test 5: muitable variable parameter callback ===");
+    auto inner = [](int a, int b, int c) {
+        VarCoroutine<std::string> co([](std::string str) {
+            std::println("inner get {}", str);
+            std::reverse(str.begin(), str.end());
+            Coroutine::yield();
+            std::println("inner reverse {}", str);
+            std::reverse(str.begin(), str.end());
+            Coroutine::yield();
+            std::println("inner reverse {}", str);
+        }, "hello world");
+
+        std::println("inner begin");
+        std::println("a {}", a);
+        Coroutine::yield();
+        std::println("{} {}", b, c);
+        while(!co.is_finished()) {
+            co.resume();
+        }
+    };
+    VarCoroutine<int, int, int> co(inner, 1, 2, 3);
+    while(!co.is_finished()) {
+        co.resume();
+    }
+    std::println("Test 5 passed\n");
+}
  
 // 主测试函数
 void run_all_tests() {
     test_basic_and_exception();
     test_nested_yield_same_coroutine();
     test_nested_yield_different_coroutines();
+    test_variable_parameters();
     std::println("=== All tests passed! ===");
 }
  
