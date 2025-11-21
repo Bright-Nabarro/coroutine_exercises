@@ -1,6 +1,8 @@
 #include <print>
 #include <string>
-#include "simple_coroutine.hpp"
+#include "yq_coroutine.hpp"
+
+using namespace yq;
 
 // 测试1: 基础功能测试和异常测试
 void test_basic_and_exception() {

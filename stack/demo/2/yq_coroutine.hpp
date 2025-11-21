@@ -2,6 +2,7 @@
 
 #include <cassert>
 #include <cstdlib>
+#include <exception>
 #include <functional>
 #include <memory>
 #include <stdexcept>
@@ -12,17 +13,23 @@
 
 #include <windows.h>
 #define CO_USE_FIBER
+namespace yq {
 using CoHandle = void*;
-
+}
 #elif defined(__unix__)
 
 #include <ucontext.h>
+namespace yq {
 using CoHandle = ucontext_t;
+}
 #define CO_USE_UCONTEXT
 
 #else
 #error "Unsupported platform"
 #endif
+
+namespace yq
+{
 
 template <typename... Args>
 class VarCoroutine;
@@ -35,8 +42,15 @@ public:
 	virtual void resume() = 0;
 	virtual void call_task() = 0;
 	[[nodiscard]]
-	auto is_finished() const noexcept -> bool {
+	auto is_finished() const -> bool {
+		check_exception();
 		return m_finished;
+	}
+
+	virtual void check_exception() const {
+		if (m_excepted) {
+			std::rethrow_exception(m_excepted);
+		}
 	}
 
 protected:
@@ -51,7 +65,9 @@ protected:
 	CoHandle m_handle{};
 	// 协程是否结束
 	bool m_finished { false };
+	std::exception_ptr m_excepted { nullptr };
 };
+
 
 template <typename... Args>
 class VarCoroutine : public BaseCoroutine {
@@ -130,6 +146,7 @@ public:
 	VarCoroutine& operator=(const VarCoroutine&) = delete;
 
 	void resume() override {
+		check_exception();
 		if (m_finished) {
 			throw std::logic_error{"coroutine finished"};
 			return;
@@ -182,8 +199,8 @@ private:
 		try {
 			co_current->call_task();
 		} catch (...) {
+			co_current->m_excepted = std::current_exception();
 			co_current->m_finished = true;
-			throw;
 		}
 		co_current->m_finished = true;
 		// 切换回上一级
@@ -199,8 +216,8 @@ private:
 		try {
 			co_current->call_task();
 		} catch (...) {
+			co_current->m_excepted = std::current_exception();
 			co_current->m_finished = true;
-			throw;
 		}
 		co_current->m_finished = true;
 		// 函数返回时， 使用uc_link中设置的上下文，切换回主函数
@@ -212,15 +229,12 @@ private:
 private:
 	// 当前协程在co_list中的索引
 	std::size_t m_cur_index;
-
 	// 栈大小
 	std::size_t m_stack_size;
-
 	// 任务函数
 	std::function<void(Args...)> m_task;
 	// 回调函数参数
 	std::tuple<Args...> m_func_args;
-
 #ifdef CO_USE_UCONTEXT
 	// 栈空间
 	std::unique_ptr<char[]> m_stack;
@@ -228,3 +242,5 @@ private:
 };
 
 using Coroutine = VarCoroutine<>;
+
+} //namespace yq
