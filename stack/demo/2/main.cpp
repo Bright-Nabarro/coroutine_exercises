@@ -211,6 +211,7 @@ void run_all_tests() {
     test_nested_yield_same_coroutine();
     test_nested_yield_different_coroutines();
     test_variable_parameters();
+    test_nested_variable_parameters();
     std::println("=== All tests passed! ===");
 }
  

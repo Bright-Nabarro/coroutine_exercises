@@ -175,19 +175,19 @@ private:
 	 * param param 创建Fiber时传入的参数(this指针), 也可以用m_current访问
 	 */
 	static void CALLBACK context_entry(void* param) {
-		auto* co_current = static_cast<Coroutine*>(param);
+		auto* co_current = static_cast<BaseCoroutine*>(param);
 		assert(!co_list.empty());
 		assert(co_cur_index == co_list.size() - 1);
 		assert(co_list.back() == param);
 		try {
-			co_current->m_task();
+			co_current->call_task();
 		} catch (...) {
 			co_current->m_finished = true;
 			throw;
 		}
 		co_current->m_finished = true;
 		// 切换回上一级
-		SwitchToFiber(co_list[co_current->m_cur_index - 1]->m_handle);
+		SwitchToFiber(co_list[co_current->co_cur_index - 1]->m_handle);
 		// co_cur_index 已经在析构函数中更新
 	}
 
