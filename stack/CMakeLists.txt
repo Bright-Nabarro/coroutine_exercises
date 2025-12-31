@@ -1,2 +1,3 @@
-add_subdirectory("demo/1")
-add_subdirectory("demo/2")
+add_subdirectory("demo/01")
+add_subdirectory("demo/02")
+add_subdirectory("demo/03")

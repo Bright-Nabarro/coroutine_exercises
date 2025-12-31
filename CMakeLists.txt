@@ -23,4 +23,5 @@ else()
 	)
 endif()
 
+add_subdirectory(no_stack)
 add_subdirectory(stack)
