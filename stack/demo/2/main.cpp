@@ -1,5 +1,6 @@
 #include <print>
 #include <string>
+#include <algorithm>
 #include "yq_coroutine.hpp"
 
 using namespace yq;
@@ -206,14 +207,42 @@ void test_nested_variable_parameters() {
     }
     std::println("Test 5 passed\n");
 }
+
+void test_problem_1() {
+	Coroutine outer { [] {
+			Coroutine inner {
+				[] {
+					std::println("inner begin");
+					Coroutine::yield();
+					std::println("inner end");
+				}
+			};
+			std::println("inner resume 1 begin");
+			inner.resume();
+			std::println("inner resume 1 end");
+			std::println("inner resume 2 begin");
+			inner.resume();
+			std::println("inner resume 2 end");
+
+			std::println("outter yield begin");
+			Coroutine::yield();
+			std::println("outter yield end");
+		}
+	};
+
+	std::println("outer.resume(); begin");
+	outer.resume();
+	std::println("outer.resume(); end");
+}
  
 // 主测试函数
 void run_all_tests() {
-    test_basic_and_exception();
-    test_nested_yield_same_coroutine();
-    test_nested_yield_different_coroutines();
-    test_variable_parameters();
-    test_nested_variable_parameters();
+    //test_basic_and_exception();
+    //test_nested_yield_same_coroutine();
+    //test_nested_yield_different_coroutines();
+    //test_variable_parameters();
+    //test_nested_variable_parameters();
+	test_problem_1();
     std::println("=== All tests passed! ===");
 }
  

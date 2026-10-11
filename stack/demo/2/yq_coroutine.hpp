@@ -205,7 +205,6 @@ private:
 		co_current->m_finished = true;
 		// 切换回上一级
 		SwitchToFiber(co_list[co_current->co_cur_index - 1]->m_handle);
-		// co_cur_index 已经在析构函数中更新
 	}
 
 #else
