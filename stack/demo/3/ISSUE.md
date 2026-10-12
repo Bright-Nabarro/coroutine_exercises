@@ -2,23 +2,7 @@
 
 `main.cpp` 使用简单检查和执行轨迹，不依赖测试框架。失败会打印 `[FAIL]`，最后返回非零退出码。
 
-## 运行结果
-
-2026-10-10 使用本机 clang64 构建并运行：
-
-- 现有 CMake 构建：11 项通过，1 项失败。
-- 额外以 `-O2 -DNDEBUG -Wall -Wextra -Werror` 构建：11 项通过，1 项失败。用户调用检查不依赖 `assert`。
-- 两个版本均只有问题 1 的复现测试失败，程序正常报告后以退出码 1 结束。
-- 协程实现没有为测试修改；下面标记为静态审查的问题没有通过故障注入或危险操作验证。
-
-在仓库根目录运行：
-
-```sh
-cmake --build ./build/clang --target stack_demo_3
-./build/clang/stack/demo/3/stack_demo_3.exe
-```
-
-## 1. 销毁暂停协程不会析构任务栈上的局部对象
+## 1. （已解决）销毁暂停协程不会析构任务栈上的局部对象
 
 状态：已有运行时回归测试，名称为 `ISSUE-1: destroying a paused task must clean up locals`。修复前应失败，不能为了全绿删掉检查或把失败当作通过。
 
@@ -79,7 +63,6 @@ root -> outer.resume() -> inner.resume() -> outer.resume()
 
 当前只拒绝恢复自己，不能拒绝重新进入正在等待内层返回的外层。用户必须禁止这种重入，否则会覆盖 `caller` 并破坏恢复顺序。
 
-当前允许的情况是：一个协程先暂停返回外层，之后在没有活动调用链冲突时，由根部再次恢复。`caller changes from outer to root` 测试覆盖这个合法场景。
 
 ## 5. 销毁当前执行的协程没有保护
 
