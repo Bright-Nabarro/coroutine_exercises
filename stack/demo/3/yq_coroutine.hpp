@@ -9,7 +9,7 @@
 #include <cassert>
 
 #if defined(_WIN32)
-
+#define NOMINMAX
 #include <windows.h>
 #define CO_USE_FIBER
 namespace yq {
@@ -78,6 +78,8 @@ struct CoroutineCore
 #ifdef CO_USE_FIBER
 	static void ensure_root_context();
 #endif
+	void yield();
+
 	CoHandle handle {};
 	CoroutineStatus status {};
 	CoroutineCore* caller { nullptr };
@@ -89,6 +91,10 @@ struct CoroutineCore
 	// 栈空间
 	std::unique_ptr<char[]> stack{};
 #endif
+
+private:
+	void check_yield() const;
+	void suspend();
 };
 
 template<typename R>
@@ -103,9 +109,26 @@ struct CoroutineState
 	ResultStorage<R> ret;
 };
 
+// 调度接口不依赖结果类型；结果由 Coroutine<R> 自己保存和取出。
+class CoroutineBase
+{
+public:
+	CoroutineBase(const CoroutineBase&) = delete;
+	CoroutineBase& operator=(const CoroutineBase&) = delete;
+	virtual ~CoroutineBase() = default;
+
+	virtual void resume() = 0;
+	virtual void yield() = 0;
+	virtual void cancel() = 0;
+	virtual bool is_finished() const noexcept = 0;
+	virtual CoroutineStatus status() const noexcept = 0;
+
+protected:
+	CoroutineBase() = default;
+};
 
 template<typename R = void>
-class Coroutine
+class Coroutine : public CoroutineBase
 {
 public:
 	template<typename Func, typename... Args>
@@ -171,7 +194,7 @@ public:
 	Coroutine(const Coroutine&) = delete;
 	Coroutine& operator=(const Coroutine&) = delete;
 
-	~Coroutine()
+	~Coroutine() override
 	{
 		if (this != static_cast<void*>(&CoroutineCore::co_root))
 		{
@@ -186,7 +209,8 @@ public:
 		}
 	}
 
-	R resume()
+	// 只恢复执行，不消费暂停值或最终值。
+	void resume() override
 	{
 		check_exception();
 		const auto s = status();
@@ -214,24 +238,39 @@ public:
 		swapcontext(&m_handle->core.caller->handle, &m_handle->core.handle);
 #endif
 		check_exception();
+	}
+
+	// 取出已有的暂停值或最终值，取出后清空；非 void 的结果没有待取值时抛出使用错误。
+	R result()
+	{
+		check_exception();
+		const auto s = status();
+		if (s != CoroutineStatus::Suspended && s != CoroutineStatus::Finished) {
+			throw CoroutineException{"cannot get a result before the coroutine pauses or finishes"};
+		}
+		if constexpr (!std::is_void_v<R>) {
+			if (!m_handle->ret.has_value()) {
+				throw CoroutineException{"coroutine has no result"};
+			}
+		}
 		return m_handle->ret.forward();
 	}
 
 	template<typename R_Ref>
 	void yield(R_Ref&& value) requires (!std::is_void_v<R>)
 	{
-		check_yield();
+		m_handle->core.check_yield();
 		m_handle->ret.emplace(std::forward<R_Ref>(value));
-		suspend();
+		m_handle->core.suspend();
 	}
 
-	void yield() requires std::is_void_v<R>
+	// 任意结果类型都允许无值暂停，供 sleep 等调度操作使用。
+	void yield() override
 	{
-		check_yield();
-		suspend();
+		m_handle->core.yield();
 	}
 
-	void cancel()
+	void cancel() override
 	{
 		if (status() == CoroutineStatus::Running)
 		{
@@ -257,46 +296,17 @@ public:
 #endif
 	}
 
-	constexpr bool is_finished() const noexcept
+	constexpr bool is_finished() const noexcept override
 	{
 		return status() == CoroutineStatus::Finished;
 	}
 
-	constexpr CoroutineStatus status() const noexcept
+	constexpr CoroutineStatus status() const noexcept override
 	{
 		return m_handle->core.status;
 	}
 
 private:
-	void check_yield() const
-	{
-		// yield时不在当前协程上下文
-		if (CoroutineCore::co_cur_handle != &m_handle->core) {
-			throw CoroutineException{"cannot yield from a coroutine that is not running"};
-		}
-		if (status() == CoroutineStatus::Cancelling)
-		{
-			throw Cancelled{};
-		}
-	}
-
-	void suspend() 
-	{
-		assert(CoroutineCore::co_cur_handle == &m_handle->core);
-		CoroutineCore::co_cur_handle = m_handle->core.caller;
-		m_handle->core.status = CoroutineStatus::Suspended;
-#ifdef CO_USE_FIBER
-		SwitchToFiber(m_handle->core.caller->handle);
-#elifdef CO_USE_UCONTEXT
-		// 保存当前上下文到param1, 切换到协程上下文param2
-		swapcontext(&m_handle->core.handle, &m_handle->core.caller->handle);
-#endif
-		if (status() == CoroutineStatus::Cancelling)
-		{
-			throw Cancelled{};
-		}
-	}
-
 	void check_exception() const {
 		if (m_handle->core.excepted) {
 			std::rethrow_exception(m_handle->core.excepted);
@@ -339,10 +349,21 @@ private:
 namespace co //放一些相关的常用全局函数
 {
 
-template<typename R>
-R resume(Coroutine<R>& co_handle)
+inline void yield()
 {
-	return co_handle.resume();
+	CoroutineCore::co_cur_handle->yield();
+}
+
+inline void resume(CoroutineBase& co_handle)
+{
+	co_handle.resume();
+}
+
+template<typename R>
+inline R resume(Coroutine<R>& co_handle)
+{
+	co_handle.resume();
+	return co_handle.result();
 }
 
 template<typename R, typename R_Ref>
@@ -351,8 +372,7 @@ void yield(Coroutine<R>& co_handle, R_Ref&& value)
 	co_handle.yield(std::forward<R_Ref>(value));
 }
 
-template<typename R>
-void yield(Coroutine<R>& co_handle)
+inline void yield(CoroutineBase& co_handle)
 {
 	co_handle.yield();
 }
