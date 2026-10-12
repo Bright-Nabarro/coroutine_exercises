@@ -61,7 +61,7 @@ void test_void_yield_across_function() {
         yq::co::yield(co);
         order.push_back("function.after-yield");
     };
-    yq::Coroutine<void> co([&] {
+    yq::Coroutine<void> co([&order, &ordinary_function, &co] {
         order.push_back("task.begin");
         ordinary_function(co);
         order.push_back("task.end");
@@ -82,7 +82,7 @@ void test_void_yield_across_function() {
 
 void test_pause_and_final_values() {
     std::vector<std::string> order;
-    yq::Coroutine<int> co([&] {
+    yq::Coroutine<int> co([&order, &co] {
         order.push_back("task.yield-10");
         yq::co::yield(co, 10);
         order.push_back("task.yield-20");
@@ -106,9 +106,9 @@ void test_pause_and_final_values() {
 
 void test_nested_finished_inner() {
     std::vector<std::string> order;
-    yq::Coroutine<int> outer([&] {
+    yq::Coroutine<int> outer([&order, &outer] {
         order.push_back("outer.begin");
-        yq::Coroutine<int> inner([&] {
+        yq::Coroutine<int> inner([&order, &inner] {
             order.push_back("inner.yield-10");
             inner.yield(10);
             order.push_back("inner.return-20");
@@ -143,12 +143,12 @@ void test_nested_finished_inner() {
 void test_caller_changes() {
     std::vector<std::string> order;
     // inner 先创建，也可以由之后创建的 outer 恢复。
-    yq::Coroutine<void> inner([&] {
+    yq::Coroutine<void> inner([&order, &inner] {
         order.push_back("inner.first");
         inner.yield();
         order.push_back("inner.end");
     });
-    yq::Coroutine<void> outer([&] {
+    yq::Coroutine<void> outer([&order, &inner, &outer] {
         order.push_back("outer.before-inner");
         inner.resume();
         order.push_back("outer.after-inner");
@@ -188,7 +188,7 @@ void test_constructor_arguments() {
 }
 
 void test_move_only_results() {
-    yq::Coroutine<std::unique_ptr<int>> co([&] {
+    yq::Coroutine<std::unique_ptr<int>> co([&co] {
         co.yield(std::make_unique<int>(7));
         return std::make_unique<int>(8);
     });
@@ -211,7 +211,7 @@ void test_move_only_results() {
 
 void test_invalid_operations() {
     std::vector<std::string> order;
-    yq::Coroutine<void> co([&] {
+    yq::Coroutine<void> co([&order, &co] {
         order.push_back("task.begin");
         bool caught = false;
         try {
@@ -271,7 +271,7 @@ void test_task_exceptions() {
 
     std::vector<std::string> order;
     bool local_destroyed = false;
-    yq::Coroutine<int> delayed([&]() -> int {
+    yq::Coroutine<int> delayed([&order, &local_destroyed, &delayed]() -> int {
         TaskLocal local{local_destroyed};
         order.push_back("task.yield-10");
         delayed.yield(10);
@@ -297,7 +297,7 @@ void test_task_exceptions() {
 
 void test_completed_task_cleanup() {
     bool local_destroyed = false;
-    yq::Coroutine<void> co([&] {
+    yq::Coroutine<void> co([&local_destroyed, &co] {
         TaskLocal local{local_destroyed};
         co.yield();
     });
@@ -311,7 +311,7 @@ void test_completed_task_cleanup() {
 void test_paused_task_cleanup() {
     bool local_destroyed = false;
     {
-        yq::Coroutine<void> co([&] {
+        yq::Coroutine<void> co([&local_destroyed, &co] {
             TaskLocal local{local_destroyed};
             co.yield();
         });
