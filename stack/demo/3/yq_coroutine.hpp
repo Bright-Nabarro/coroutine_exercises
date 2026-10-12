@@ -15,16 +15,26 @@ namespace yq {
 using CoHandle = void*;
 }
 
+#elif defined(__unix__)
+
+#include <ucontext.h>
+namespace yq {
+using CoHandle = ucontext_t;
+}
+#define CO_USE_UCONTEXT
+
 #else
-
 #error "Unsuppored platform"
-
 #endif
 
 #ifdef CO_USE_FIBER
 #define CONTEXT_ENTRY_PROPERTY CALLBACK
 #define CONTEXT_ENTRY_PARAM(param) VOID* param
-using ContenxtEntryFunc = VOID (CALLBACK*)(VOID*);
+using ContextEntryFunc = VOID (CALLBACK*)(VOID*);
+#elif defined(__unix__)
+#define CONTEXT_ENTRY_PROPERTY  
+#define CONTEXT_ENTRY_PARAM(param)
+using ContextEntryFunc = void;
 #endif
 
 #define CO_DEFAULT_STACK_SIZE 2*1024*1024
@@ -52,6 +62,8 @@ struct CoroutineCore
 	{
 		//给co_root构建使用
 		//assert()
+		
+		// 对于ucontext, 不在这里初始化. swap时会接受上下文
 #ifdef CO_USE_FIBER
 		handle = ConvertThreadToFiber(nullptr);
 		if (!handle)
