@@ -3,6 +3,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <print>
 #include <vector>
 
 namespace {

@@ -29,12 +29,12 @@ using CoHandle = ucontext_t;
 
 #ifdef CO_USE_FIBER
 #define CONTEXT_ENTRY_PROPERTY CALLBACK
-#define CONTEXT_ENTRY_PARAM(param) VOID* param
-using ContextEntryFunc = VOID (CALLBACK*)(VOID*);
+#define CONTEXT_ENTRY_PARAM(param) void* param
+using ContextEntryFunc = void (CALLBACK*)(void*);
 #elif defined(__unix__)
 #define CONTEXT_ENTRY_PROPERTY  
 #define CONTEXT_ENTRY_PARAM(param)
-using ContextEntryFunc = void;
+using ContextEntryFunc = void(*)();
 #endif
 
 #define CO_DEFAULT_STACK_SIZE 2*1024*1024
@@ -88,7 +88,12 @@ struct CoroutineCore
 	CoroutineCore* caller { nullptr };
 	std::size_t stack_size { 0 };
 	std::exception_ptr excepted { nullptr };
+	// libc++没有move_only_function的实现，使用function替代
 	std::function<void()> task{};
+#ifdef CO_USE_UCONTEXT
+	// 栈空间
+	std::unique_ptr<char[]> stack{};
+#endif
 };
 
 template<typename R>
@@ -141,10 +146,22 @@ public:
 
 		CoroutineCore* core = &state->core;
 		// 对于不是co_root构造的，handle没有赋值
-		assert(core->handle == nullptr);
 		assert(CoroutineCore::co_cur_handle != nullptr);
 #ifdef CO_USE_FIBER
+		assert(core->handle == nullptr);
 		core->handle = CreateFiber(m_handle->core.stack_size, Coroutine<R>::context_entry, this);
+#elifdef CO_USE_UCONTEXT
+		assert(stack_size > 0);
+		core->stack = std::make_unique<char[]>(core->stack_size);
+		// 当前上下文作为初始化模版
+		getcontext(&core->handle);
+		// 设置栈空间
+		core->handle.uc_stack.ss_size = core->stack_size;
+		core->handle.uc_stack.ss_sp = core->stack.get();
+		core->handle.uc_link = nullptr;
+		//设置入口函数
+		makecontext(&core->handle, context_entry, 0);
+		
 #endif
 		core->status = CoroutineStatus::Ready;
 	}
@@ -189,6 +206,10 @@ public:
 		m_handle->core.status = CoroutineStatus::Running;
 #ifdef CO_USE_FIBER
 		SwitchToFiber(m_handle->core.handle);
+#elifdef CO_USE_UCONTEXT
+		
+		// 保存当前上下文到param1, 切换到协程上下文param2
+		swapcontext(&m_handle->core.caller->handle, &m_handle->core.handle);
 #endif
 		check_exception();
 		return m_handle->ret.forward();
@@ -227,7 +248,11 @@ public:
 		m_handle->core.status = CoroutineStatus::Cancelling;
 		m_handle->core.caller = CoroutineCore::co_cur_handle;
 		CoroutineCore::co_cur_handle = &m_handle->core;
+#ifdef CO_USE_FIBER
 		SwitchToFiber(m_handle->core.handle);
+#elifdef CO_USE_UCONTEXT
+		swapcontext(&m_handle->core.caller->handle, &m_handle->core.handle);
+#endif
 	}
 
 	constexpr bool is_finished() const noexcept
@@ -260,6 +285,9 @@ private:
 		m_handle->core.status = CoroutineStatus::Suspended;
 #ifdef CO_USE_FIBER
 		SwitchToFiber(m_handle->core.caller->handle);
+#elifdef CO_USE_UCONTEXT
+		// 保存当前上下文到param1, 切换到协程上下文param2
+		swapcontext(&m_handle->core.handle, &m_handle->core.caller->handle);
 #endif
 		if (status() == CoroutineStatus::Cancelling)
 		{
@@ -276,27 +304,30 @@ private:
 	// param为当前函数的this指针
 	static void CONTEXT_ENTRY_PROPERTY context_entry(CONTEXT_ENTRY_PARAM(param))
 	{
-#ifdef CO_USE_FIBER
-		auto* co_current = static_cast<Coroutine<R>*>(param);
-		CoroutineState<R>* state = co_current->m_handle.get();
-		auto& core = state->core;
-		assert(core.caller != nullptr);
+		auto* core = CoroutineCore::co_cur_handle;
+		assert(core->caller != nullptr);
 		//当前执行的是在刚resume后，所以调用栈最新
-		assert(CoroutineCore::co_cur_handle == &core);
-		assert(core.status == CoroutineStatus::Running);
+		assert(CoroutineCore::co_cur_handle == core);
+		assert(core->status == CoroutineStatus::Running);
 		try {
-			core.task();
+			core->task();
 		} catch(Cancelled) {
 			//pass
 		}catch(...) {
-			core.excepted = std::current_exception();
+			core->excepted = std::current_exception();
 		}
-		core.status = CoroutineStatus::Finished;
+		core->status = CoroutineStatus::Finished;
 
-		CoroutineCore::co_cur_handle = core.caller;
-		assert(core.caller);
-		SwitchToFiber(core.caller->handle);
+		CoroutineCore::co_cur_handle = core->caller;
+		assert(core->caller);
+#ifdef CO_USE_FIBER
+		(void)param;
+		SwitchToFiber(core->caller->handle);
+#elifdef CO_USE_UCONTEXT
+		// caller可能是动态的, uc_link无法固定，所以手动切回caller
+		setcontext(&core->caller->handle);
 #endif
+		assert(false && "terminate");
 	}
 
 private:
