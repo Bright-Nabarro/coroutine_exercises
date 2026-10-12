@@ -29,14 +29,14 @@ bool destroyed = false;
 
 这项失败测试检验的是“直接销毁暂停协程时自动清理”的能力。如果最终决定禁止这种销毁，应把它改为验证相应契约；不要求为了通过测试一定实现自动取消。
 
-## 2. Windows Fiber API 的失败没有处理
+## 2. （已处理，未测试）Windows Fiber API 的失败没有处理
 
-状态：静态审查发现，没有进行故障注入测试。
+状态：已添加错误处理；本次按要求未运行测试，没有进行故障注入验证。
 
-- `CreateFiber` 返回空指针时，构造仍然成功，之后会用空 handle 调用 `SwitchToFiber`。
-- `ConvertThreadToFiber` 失败后无条件调用 `GetCurrentFiber`，错误地把所有失败都当作“线程已经是 Fiber”。应先用 `IsThreadAFiber` 判断，再选择获取当前 Fiber 或转换线程，并处理真正的失败。
-- 系统资源不足与用户违反接口约定不同，宜与 `CoroutineException` 区分。
-- `co_root` 是具有动态初始化的非局部 `thread_local` 对象。若直接在其初始化中抛异常，异常会导致 `std::terminate`，不能简单照搬普通构造函数的失败回抛策略。
+- `CreateFiber` 返回空指针时，立即保存 `GetLastError()`，抛出 `std::system_error`，使协程构造失败。
+- root 初始化先用 `IsThreadAFiber` 判断：已有 Fiber 时获取当前句柄，否则调用 `ConvertThreadToFiber`；转换失败时同样保存错误码并抛出 `std::system_error`。
+- 系统操作失败使用 `std::system_error`，与表示接口使用错误的 `CoroutineException` 区分。
+- `co_root` 的非局部 `thread_local` 构造只初始化数据。Windows 转换移到普通函数 `ensure_root_context()`，由协程构造函数调用，避免转换异常逃出 root 的动态初始化并触发 `std::terminate`。转换失败不保存句柄，之后的构造可以重试。
 
 参考：[CreateFiber](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-createfiber)、[ConvertThreadToFiber](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-convertthreadtofiber)、[thread_local 动态初始化](https://eel.is/c++draft/basic.start.dynamic)。
 

@@ -4,6 +4,7 @@
 #include <exception>
 #include <functional>
 #include <memory>
+#include <system_error>
 #include <utility>
 #include <cassert>
 
@@ -60,17 +61,8 @@ struct CoroutineCore
 {
 	CoroutineCore()
 	{
-		//给co_root构建使用
-		//assert()
-		
-		// 对于ucontext, 不在这里初始化. swap时会接受上下文
-#ifdef CO_USE_FIBER
-		handle = ConvertThreadToFiber(nullptr);
-		if (!handle)
-		{
-			handle = GetCurrentFiber();
-		}
-#endif
+		// co_root 的 thread_local 构造只初始化数据，避免系统错误在这里抛出。
+		// ucontext 的根上下文由 swapcontext 保存。
 		status = CoroutineStatus::Ready;
 	}
 	CoroutineCore(std::size_t stack_size_):
@@ -83,6 +75,9 @@ struct CoroutineCore
 	// 为了使最外层（主函数）不创建协程环境情况下可以resume
 	static thread_local CoroutineCore co_root;
 	static thread_local CoroutineCore* co_cur_handle;
+#ifdef CO_USE_FIBER
+	static void ensure_root_context();
+#endif
 	CoHandle handle {};
 	CoroutineStatus status {};
 	CoroutineCore* caller { nullptr };
@@ -149,7 +144,14 @@ public:
 		assert(CoroutineCore::co_cur_handle != nullptr);
 #ifdef CO_USE_FIBER
 		assert(core->handle == nullptr);
+		CoroutineCore::ensure_root_context();
 		core->handle = CreateFiber(m_handle->core.stack_size, Coroutine<R>::context_entry, this);
+		if (!core->handle)
+		{
+			const DWORD error = GetLastError();
+			throw std::system_error(
+				static_cast<int>(error), std::system_category(), "CreateFiber");
+		}
 #elifdef CO_USE_UCONTEXT
 		assert(stack_size > 0);
 		core->stack = std::make_unique<char[]>(core->stack_size);
