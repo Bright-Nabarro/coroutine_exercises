@@ -59,14 +59,14 @@ void test_construction() {
 
 void test_void_yield_across_function() {
     std::vector<std::string> order;
-    auto ordinary_function = [&order] {
+    auto ordinary_function = [&order](yq::Coroutine<void>& co) {
         order.push_back("function.before-yield");
-        yq::co::yield();
+        yq::co::yield(co);
         order.push_back("function.after-yield");
     };
-    yq::Coroutine<void> co([&order, &ordinary_function] {
+    yq::Coroutine<void> co([&order, &ordinary_function, &co] {
         order.push_back("task.begin");
-        ordinary_function();
+        ordinary_function(co);
         order.push_back("task.end");
     });
 
@@ -152,19 +152,19 @@ void test_nested_finished_inner() {
 void test_caller_changes() {
     std::vector<std::string> order;
     // inner 先创建，也可以由之后创建的 outer 恢复。
-    yq::Coroutine<void> inner([&order] {
+    yq::Coroutine<void> inner([&order, &inner] {
         order.push_back("inner.first");
-        yq::co::yield();
+        inner.yield();
         order.push_back("inner.end");
     });
-    yq::Coroutine<void> outer([&order, &inner] {
+    yq::Coroutine<void> outer([&order, &inner, &outer] {
         auto* outer_core = yq::CoroutineCore::co_cur_handle;
         order.push_back("outer.before-inner");
         inner.resume();
         check(yq::CoroutineCore::co_cur_handle == outer_core,
               "inner yield did not restore the outer coroutine");
         order.push_back("outer.after-inner");
-        yq::co::yield();
+        outer.yield();
         check(yq::CoroutineCore::co_cur_handle == outer_core,
               "outer resume did not restore the current coroutine");
         order.push_back("outer.end");
@@ -285,9 +285,9 @@ void test_base_resume_and_result() {
 
 void test_typed_resume_without_value() {
     std::vector<std::string> order;
-    yq::Coroutine<int> co([&order] {
+    yq::Coroutine<int> co([&order, &co] {
         order.push_back("task.empty-yield");
-        yq::co::yield();
+        co.yield();
         order.push_back("task.return-42");
         return 42;
     });
@@ -324,13 +324,6 @@ void test_base_destruction_cleanup() {
 
 void test_invalid_operations() {
     std::vector<std::string> order;
-    bool root_yield_rejected = false;
-    try { yq::co::yield(); }
-    catch (const yq::CoroutineException&) { root_yield_rejected = true; }
-    check(root_yield_rejected, "global yield from root was not rejected");
-    check(yq::CoroutineCore::co_cur_handle == &yq::CoroutineCore::co_root,
-          "rejected root yield changed the current coroutine");
-
     yq::Coroutine<void> co([&order, &co] {
         order.push_back("task.begin");
         bool caught = false;
@@ -433,9 +426,9 @@ void test_completed_task_cleanup() {
 void test_paused_task_cleanup() {
     bool local_destroyed = false;
     {
-        yq::Coroutine<void> co([&local_destroyed] {
+        yq::Coroutine<void> co([&local_destroyed, &co] {
             TaskLocal local{local_destroyed};
-            yq::co::yield();
+            co.yield();
         });
         co.resume();
         check(!local_destroyed, "task local did not survive the pause");
@@ -443,20 +436,20 @@ void test_paused_task_cleanup() {
     check(local_destroyed, "paused task local destructor was skipped (see ISSUE.md #1)");
 }
 
-void test_current_yield_during_cancel() {
+void test_yield_during_cancel() {
     std::vector<std::string> order;
     bool local_destroyed = false;
-    yq::Coroutine<void> co([&order, &local_destroyed] {
+    yq::Coroutine<void> co([&order, &local_destroyed, &co] {
         TaskLocal local{local_destroyed};
         order.push_back("task.pause");
         try {
-            yq::co::yield();
+            co.yield();
         } catch (const yq::Cancelled&) {
             order.push_back("task.caught-cancel");
         }
         // 吞掉取消异常后再次暂停，也必须抛出，不能切回调用者。
         try {
-            yq::co::yield();
+            co.yield();
             order.push_back("task.unexpected-resume");
         } catch (const yq::Cancelled&) {
             order.push_back("task.second-yield-rejected");
@@ -467,41 +460,15 @@ void test_current_yield_during_cancel() {
     order.push_back("root.cancel");
     co.cancel();
     order.push_back("root.after-cancel");
-    check(co.is_finished() && local_destroyed, "global yield cancellation did not clean up the task");
+    check(co.is_finished() && local_destroyed, "yield cancellation did not clean up the task");
     check(yq::CoroutineCore::co_cur_handle == &yq::CoroutineCore::co_root,
-          "global yield cancellation did not restore root");
+          "yield cancellation did not restore root");
     check_order(order, {"task.pause", "root.cancel", "task.caught-cancel",
                         "task.second-yield-rejected", "task.end", "root.after-cancel"});
 }
 
 using namespace std::chrono_literals;
 using Clock = std::chrono::steady_clock;
-
-void test_interface() {
-    auto& loop = yq::CoLoop::instance();
-    std::vector<std::string> order;
-    std::shared_ptr<yq::Coroutine<int>> co;
-    co = std::make_shared<yq::Coroutine<int>>([&order, &co] {
-        order.push_back("task.yield-1");
-        co->yield(1);
-        order.push_back("task.yield-2");
-        co->yield(2);
-        order.push_back("task.return-3");
-        return 3;
-    });
-    auto task = loop.ensure_future(co);
-    check(order.empty(), "ensure_future executed the coroutine immediately");
-    check(task->coroutine() == co && task->base_coroutine() == co,
-          "task getters did not refer to the original coroutine");
-    task->coroutine()->resume();
-    check(task->coroutine()->result() == 1, "registered coroutine lost its first pause value");
-    order.push_back("root.got-1");
-    loop.run();
-    check(task->coroutine()->is_finished(), "loop did not finish the registered coroutine");
-    check(task->coroutine()->result() == 3, "registered coroutine lost its final value");
-    order.push_back("root.got-3");
-    check_order(order, {"task.yield-1", "root.got-1", "task.yield-2", "task.return-3", "root.got-3"});
-}
 
 void test_loop_spawn_and_reuse() {
     auto& loop = yq::CoLoop::instance();
@@ -757,12 +724,11 @@ void test_coroutine(auto& test) {
     test("task exception keeps its type and restores root", test_task_exceptions);
     test("completed task destroys its local objects", test_completed_task_cleanup);
     test("destroying a paused task must clean up locals", test_paused_task_cleanup);
-    test("current yield rejects a new pause during cancellation", test_current_yield_during_cancel);
+    test("yield rejects a new pause during cancellation", test_yield_during_cancel);
 }
 
 void test_coroutine_loop(auto& test) {
     std::cout << "\n=== Coroutine loop tests ===\n";
-    test("ensure_future registers an existing coroutine and preserves its result", test_interface);
     test("loop spawn and reuse", test_loop_spawn_and_reuse);
     test("loop spawn forwards constructor arguments", test_loop_spawn_arguments);
     test("loop preserves typed results and releases finished tasks", test_loop_typed_results);

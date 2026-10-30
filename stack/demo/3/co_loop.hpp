@@ -33,15 +33,10 @@ public:
             std::decay_t<Func>, std::decay_t<Args>...>>;
         auto coroutine = std::make_shared<Coroutine<R>>(
             std::forward<Func>(work), std::forward<Args>(args)...);
-		return ensure_future<R>(coroutine);
+        auto task = std::make_shared<CoTask<R>>(std::move(coroutine));
+        m_tasks.push_back(task);
+        return task;
     }
-
-	template<typename R>
-	auto ensure_future(std::shared_ptr<Coroutine<R>> coroutine) {
-		auto task = std::make_shared<CoTask<R>>(std::move(coroutine));
-		m_tasks.push_back(task);
-		return task;
-	}
 
     void sleep(std::chrono::milliseconds delay) {
         if (m_current == nullptr) {

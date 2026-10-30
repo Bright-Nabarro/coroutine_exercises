@@ -18,7 +18,6 @@ int result = task->coroutine()->result(); // 42；task 是 shared_ptr<CoTask<int
 
 - `spawn(f, args...)` 按保存后的函数和参数类型推导 `R`，构造 `Coroutine<R>`，等 `run()` 才执行。
 - 循环内部保存 `shared_ptr<CoTaskBase>`，通过 `base_coroutine()` 调度；调用方拿到 `shared_ptr<CoTask<R>>`，通过 `coroutine()` 取值，不需要 `dynamic_cast`。
-- `ensure_future(shared_ptr<Coroutine<R>>)` 把已有协程登记到循环中，并返回持有它的类型化任务。
 - 当前结果按值保存：函数返回 `const T&` 或 `T&&` 时，`R` 推导为 `T`；只能移动的返回值也可以保存。
 - `sleep()` 记录唤醒时间，然后调用当前任务的 `yield()`。
 - `run()` 每轮恢复已到时间的任务，结束或已取消的任务立即移除。循环只调用成员 `resume()`，不会消费结果。
@@ -50,7 +49,6 @@ cmake --build build/clang --target stack_demo_3_loop
 `test_coroutine()` 运行协程本身的测试，`test_coroutine_loop()` 运行循环测试，检查：
 
 - 任务延迟到 `run()` 执行，空循环和多次运行。
-- `ensure_future()` 登记已有协程，类型化和基类访问器指向同一个对象，手动恢复一次后仍能交由循环完成。
 - `spawn()` 的构造参数按值保存，`std::ref` 保留引用。
 - `int`、`string`、`unique_ptr<int>`、`void` 任务交替执行，循环不消费结果，完成任务正常释放。
 - 引用返回按值保存，运行前已取消的任务被跳过。

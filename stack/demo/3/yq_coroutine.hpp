@@ -349,11 +349,6 @@ private:
 namespace co //放一些相关的常用全局函数
 {
 
-inline void yield()
-{
-	CoroutineCore::co_cur_handle->yield();
-}
-
 inline void resume(CoroutineBase& co_handle)
 {
 	co_handle.resume();
