@@ -552,7 +552,7 @@ int main() {
 		std::println("t2 end");
 	};
 
-	co::syncloop.spawn(t1);
+	//co::syncloop.spawn(t1);
 	co::syncloop.spawn(t2);
 	co::syncloop.run();
 }

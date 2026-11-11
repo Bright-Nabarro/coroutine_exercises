@@ -252,7 +252,6 @@ public:
 
 		m_handle->core.caller = CoroutineCore::co_cur_handle;
 		CoroutineCore::co_cur_handle = &m_handle->core;
-		assert(CoroutineCore::co_cur_handle == &m_handle->core);
 		m_handle->core.status = CoroutineStatus::Running;
 #ifdef CO_USE_FIBER
 		SwitchToFiber(m_handle->core.handle);
