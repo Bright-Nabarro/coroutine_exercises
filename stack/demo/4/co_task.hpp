@@ -13,6 +13,8 @@ class CoTaskBase : public std::enable_shared_from_this<CoTaskBase> {
     friend class CoLoop;
 
 public:
+    CoTaskBase(const CoTaskBase&) = delete;
+    CoTaskBase& operator=(const CoTaskBase&) = delete;
     virtual ~CoTaskBase() = default;
 
     bool is_finished() noexcept { return base_coroutine().is_finished(); }
@@ -29,6 +31,7 @@ public:
     }
 
 protected:
+    CoTaskBase() = default;
     void wait();
     bool was_cancelled() const noexcept { return m_cancelled; }
     virtual CoroutineBase& base_coroutine() noexcept = 0;

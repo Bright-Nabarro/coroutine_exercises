@@ -10,7 +10,9 @@
 #include <cassert>
 
 #if defined(_WIN32)
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 #include <windows.h>
 #define CO_USE_FIBER
 namespace yq {
@@ -294,18 +296,17 @@ public:
 
 	void cancel() override
 	{
-		if (status() == CoroutineStatus::Running)
+		switch (status())
 		{
+		case CoroutineStatus::Running:
 			throw CoroutineException{"cannot cancel a running coroutine"};
-		}
-		if (status() == CoroutineStatus::Finished)
-		{
-			throw CoroutineException{"cannot cancel a finished coroutine"};
-		}
-		if (status() == CoroutineStatus::Ready)
-		{
+		case CoroutineStatus::Finished:
+			return;
+		case CoroutineStatus::Ready:
 			m_handle->core.status = CoroutineStatus::Finished;
 			return;
+		default:
+			break;
 		}
 
 		m_handle->core.status = CoroutineStatus::Cancelling;

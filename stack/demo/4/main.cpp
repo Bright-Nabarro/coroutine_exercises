@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <print>
 using namespace std;
 
 namespace {
@@ -508,7 +509,8 @@ void test_coroutine_loop(auto& test) {
 
 } // namespace
 
-int main() {
+
+int main_test() {
     int passed = 0;
     int failed = 0;
     auto test = [&](const char* name, void (*body)()) {
@@ -530,3 +532,28 @@ int main() {
     std::cout << "\nResult: " << passed << " passed, " << failed << " failed\n";
     return failed == 0 ? 0 : 1;
 }
+
+int main() {
+	using namespace yq;
+	//return main_test();
+	auto t1 = []() {
+		std::println("task1 print");
+	};
+
+	auto t2 = []() {
+		auto _t2_child = []() {
+			std::println("t2_child begin");
+			std::println("t2_child end");
+			return 42;
+		};
+		std::println("t2 begin");
+		int value = co::await(_t2_child);
+		std::println("t2 await child {}", value);
+		std::println("t2 end");
+	};
+
+	co::syncloop.spawn(t1);
+	co::syncloop.spawn(t2);
+	co::syncloop.run();
+}
+

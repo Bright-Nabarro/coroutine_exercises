@@ -43,9 +43,18 @@ private:
 
 namespace co {
 
+static auto& syncloop { yq::CoLoop::instance() };
+
 inline void sleep(std::chrono::milliseconds delay) {
-    CoLoop::instance().sleep(delay);
+    syncloop.sleep(delay);
 }
+
+template<class Func, class... Args>
+inline auto await(Func&& work, Args&&... args) {
+	auto task = syncloop.spawn(std::forward<Func>(work), std::forward<Args>(args)...);
+	return task->await();
+}
+
 
 } // namespace co
 } // namespace yq

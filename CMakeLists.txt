@@ -21,6 +21,9 @@ else()
 		"-Wall"
 		"-Wextra"
 	)
+	if (WIN32 AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+		link_libraries(stdc++exp)
+	endif()
 endif()
 
 add_subdirectory(stack)
